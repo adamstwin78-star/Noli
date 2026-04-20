@@ -1,0 +1,264 @@
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+
+local Window = WindUI:CreateWindow({
+    Title = "Noli Tools",
+    Icon = "zap",
+    Author = "moonflower",
+    Size = UDim2.fromOffset(440, 480),
+    Theme = "Sky",
+    Resizable = true,
+    ToggleKey = Enum.KeyCode.RightShift,
+})
+
+local Tab = Window:Tab({
+    Title = "Noli",
+    Icon = "sword",
+})
+
+local SecHeli = Tab:Section({
+    Title = "Heli-Tech Macro (2nd Void Rush)",
+    Opened = true,
+})
+
+local SecAim = Tab:Section({
+    Title = "Nova Silent Aim",
+    Opened = true,
+})
+
+-- ====================== HELI-TECH ======================
+local heli = {
+    enabled = false,
+    strength = 95,
+    holdTime = 0.33,
+    remoteEvent = nil,
+    isActive = false,
+}
+
+pcall(function()
+    local net = game:GetService("ReplicatedStorage")
+        :WaitForChild("Modules", 5)
+        :WaitForChild("Network", 5)
+        :WaitForChild("Network", 5)
+    heli.remoteEvent = net:WaitForChild("RemoteEvent", 5)
+end)
+
+local function createRandomBuffer()
+    local buf = buffer.create(8)
+    buffer.writeu32(buf, 0, math.random(0, 0xFFFFFFFF))
+    buffer.writeu32(buf, 4, math.random(0, 0xFFFFFFFF))
+    return buf
+end
+
+local function fireVoidRush()
+    if not heli.remoteEvent then return end
+    heli.remoteEvent:FireServer("UseActorAbility", { createRandomBuffer() })
+end
+
+local function performHeliLaunch()
+    if heli.isActive then return end
+    heli.isActive = true
+
+    task.spawn(function()
+        local char = game.Players.LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not hrp or not hum then heli.isActive = false return end
+
+        hum.WalkSpeed = 60
+        hum:Move(hrp.CFrame.LookVector, true)
+        task.wait(0.07)
+        hrp.AssemblyLinearVelocity = hrp.AssemblyLinearVelocity - hrp.CFrame.LookVector * 14
+
+        local cam = workspace.CurrentCamera
+        if cam then
+            cam.CFrame = cam.CFrame * CFrame.Angles(math.rad(-13), 0, 0)
+        end
+
+        task.wait(math.random(65, 115) / 1000)
+        fireVoidRush()
+        task.wait(0.04)
+
+        if hrp then
+            local boost = hrp.CFrame.LookVector * heli.strength + Vector3.new(0, 50, 0)
+            hrp.AssemblyLinearVelocity = hrp.AssemblyLinearVelocity + boost
+        end
+
+        task.wait(heli.holdTime)
+        heli.isActive = false
+    end)
+end
+
+game:GetService("RunService").RenderStepped:Connect(function()
+    if not heli.enabled then return end
+    local char = game.Players.LocalPlayer.Character
+    if not char then return end
+
+    local vrState = char:GetAttribute("VoidRushState")
+    local pursuit = char:GetAttribute("PursuitState")
+    local isSecondRush = (vrState == "Dashing" or vrState == "Rerush" or vrState == "SecondDash")
+        or (pursuit == "Dashing" and char:GetAttribute("VoidRushCharge") == 0)
+
+    if isSecondRush and not heli.isActive then
+        performHeliLaunch()
+    end
+end)
+
+game:GetService("UserInputService").InputBegan:Connect(function(input, gpe)
+    if gpe or not heli.enabled then return end
+    if input.KeyCode == Enum.KeyCode.H then
+        performHeliLaunch()
+    end
+end)
+
+-- Heli GUI
+SecHeli:Toggle({
+    Title = "Enable Heli-Tech Macro",
+    Default = false,
+    Callback = function(on) heli.enabled = on end
+})
+
+SecHeli:Slider({
+    Title = "Launch Strength",
+    Desc = "Higher = more air distance (50–160)",
+    Step = 1,
+    Value = { Min = 50, Max = 160, Default = 95 },
+    Callback = function(v) heli.strength = v end
+})
+
+SecHeli:Slider({
+    Title = "Hold Time (seconds)",
+    Desc = "How long to hold the boost (0.15–0.65)",
+    Step = 0.01,
+    Value = { Min = 0.15, Max = 0.65, Default = 0.33 },
+    Callback = function(v) heli.holdTime = v end
+})
+
+SecHeli:Button({
+    Title = "Test Heli-Tech Now",
+    Callback = function() performHeliLaunch() end
+})
+
+-- ====================== NOVA SILENT AIM ======================
+local nova = {
+    enabled = false,
+    prediction = 0.55,
+    aimOffsetY = -0.4,
+    remoteEvent = nil,
+    networkRF = nil,
+    patched = false,
+    originalCallback = nil,
+}
+
+pcall(function()
+    local net = game:GetService("ReplicatedStorage")
+        :WaitForChild("Modules", 5)
+        :WaitForChild("Network", 5)
+        :WaitForChild("Network", 5)
+    nova.remoteEvent = net:WaitForChild("RemoteEvent", 5)
+    nova.networkRF = net:WaitForChild("RemoteFunction", 5)
+end)
+
+local function isNoli()
+    local char = game.Players.LocalPlayer.Character
+    if not char then return false end
+    local killers = game.Workspace:FindFirstChild("Players") and game.Workspace.Players:FindFirstChild("Killers")
+    return killers and char:IsDescendantOf(killers) and char.Name:lower():find("noli")
+end
+
+local function getNearestSurvivor(fromPos)
+    local survivors = game.Workspace:FindFirstChild("Players") and game.Workspace.Players:FindFirstChild("Survivors")
+    if not survivors then return nil end
+    local nearest, bestDist = nil, math.huge
+    for _, model in ipairs(survivors:GetChildren()) do
+        local hrp = model:FindFirstChild("HumanoidRootPart")
+        local hum = model:FindFirstChildOfClass("Humanoid")
+        if hrp and hum and hum.Health > 0 then
+            local dist = (hrp.Position - fromPos).Magnitude
+            if dist < bestDist then bestDist = dist; nearest = hrp end
+        end
+    end
+    return nearest
+end
+
+local function buildSilentCamCF(myHRP, targetHRP)
+    if not myHRP or not targetHRP then return nil end
+    local spawnPos = myHRP.Position + Vector3.new(0, 2, 0)
+    local predicted = targetHRP.Position + (targetHRP.AssemblyLinearVelocity * nova.prediction)
+    local targetPos = predicted + Vector3.new(0, nova.aimOffsetY, 0)
+
+    local delta = targetPos - spawnPos
+    local flat = Vector3.new(delta.X, 0, delta.Z)
+    if flat.Magnitude < 0.01 then return nil end
+
+    local flatDir = flat.Unit
+    local v0, g = 250, 40
+    local v2 = v0 * v0
+    local disc = v2 * v2 - g * (g * flat.Magnitude * flat.Magnitude + 2 * delta.Y * v2)
+    local theta = disc < 0 and math.atan2(delta.Y, flat.Magnitude) or math.atan2(v2 - math.sqrt(disc), g * flat.Magnitude)
+
+    local T = math.tan(theta)
+    local alpha = math.abs(3 + T) < 0.0001 and -math.pi/2 or math.atan2(3*T - 1, 3 + T)
+
+    local yawCF = CFrame.lookAt(workspace.CurrentCamera.CFrame.Position, workspace.CurrentCamera.CFrame.Position + flatDir)
+    return yawCF * CFrame.Angles(alpha, 0, 0)
+end
+
+local function applySilentAim()
+    if nova.patched or not nova.networkRF then return end
+    nova.originalCallback = nova.networkRF.OnClientInvoke
+    nova.networkRF.OnClientInvoke = function(reqName, ...)
+        if reqName == "GetCameraCF" and nova.enabled and isNoli() then
+            local char = game.Players.LocalPlayer.Character
+            local myHRP = char and char:FindFirstChild("HumanoidRootPart")
+            if myHRP then
+                local target = getNearestSurvivor(myHRP.Position)
+                if target then
+                    local cf = buildSilentCamCF(myHRP, target)
+                    if cf then return cf end
+                end
+            end
+        end
+        if nova.originalCallback then
+            return nova.originalCallback(reqName, ...)
+        end
+    end
+    nova.patched = true
+end
+
+-- Nova GUI
+SecAim:Toggle({
+    Title = "Enable Nova Silent Aim",
+    Default = false,
+    Callback = function(on)
+        nova.enabled = on
+        if on then applySilentAim() end
+    end
+})
+
+SecAim:Slider({
+    Title = "Prediction",
+    Desc = "Higher = better lead on moving targets",
+    Step = 0.01,
+    Value = { Min = 0, Max = 2, Default = 0.55 },
+    Callback = function(v) nova.prediction = v end
+})
+
+SecAim:Slider({
+    Title = "Aim Offset Y",
+    Desc = "Vertical adjustment (-5 to 5)",
+    Step = 0.1,
+    Value = { Min = -5, Max = 5, Default = -0.4 },
+    Callback = function(v) nova.aimOffsetY = v end
+})
+
+SecAim:Button({
+    Title = "Test Silent Aim",
+    Callback = function()
+        print("Nova Silent Aim is active when enabled + you use Nova ability as Noli")
+    end
+})
+
+SecAim:Paragraph({
+    Title = "How Nova Silent Aim works",
+    Content = "Automatically redirects your Nova throws toward the nearest survivor with prediction.\nWorks only when playing as Noli."
+})
